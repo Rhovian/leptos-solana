@@ -1,0 +1,13 @@
+[build]
+target = "index.html"
+release = false
+dist = "dist"
+
+[watch]
+# Also watch the parent crate's source so edits there trigger rebuilds.
+watch = ["../src", "../Cargo.toml"]
+
+[serve]
+addresses = ["127.0.0.1"]
+port = 3001
+open = false
