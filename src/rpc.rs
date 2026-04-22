@@ -164,6 +164,49 @@ impl RpcClient {
             .await?;
         Ok(resp.value)
     }
+
+    /// `getSlot` - current slot the RPC node is on. Useful alongside
+    /// `confirmTransaction` for freshness checks and for telling a user how
+    /// far behind tip a connection is.
+    pub async fn get_slot(&self) -> Result<u64> {
+        self.get_slot_with_commitment(CommitmentConfig::confirmed())
+            .await
+    }
+
+    pub async fn get_slot_with_commitment(&self, commitment: CommitmentConfig) -> Result<u64> {
+        self.call(
+            "getSlot",
+            json!([{ "commitment": commitment.commitment.to_string() }]),
+        )
+        .await
+    }
+
+    /// `getBlockHeight` - current block height (distinct from slot; skipped
+    /// slots aren't counted). Often paired with `getSlot` to diagnose fork
+    /// conditions or warn the user when skip rate is high.
+    pub async fn get_block_height(&self) -> Result<u64> {
+        self.get_block_height_with_commitment(CommitmentConfig::confirmed())
+            .await
+    }
+
+    pub async fn get_block_height_with_commitment(
+        &self,
+        commitment: CommitmentConfig,
+    ) -> Result<u64> {
+        self.call(
+            "getBlockHeight",
+            json!([{ "commitment": commitment.commitment.to_string() }]),
+        )
+        .await
+    }
+
+    /// `getMinimumBalanceForRentExemption` - lamports required to make an
+    /// account of `data_len` bytes rent-exempt. Needed before creating any
+    /// on-chain account.
+    pub async fn get_minimum_balance_for_rent_exemption(&self, data_len: u64) -> Result<u64> {
+        self.call("getMinimumBalanceForRentExemption", json!([data_len]))
+            .await
+    }
 }
 
 #[derive(Deserialize)]
