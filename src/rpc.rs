@@ -322,7 +322,8 @@ struct AccountInfoRaw {
     owner: String,
     lamports: u64,
     executable: bool,
-    #[serde(default)]
+    /// Solana wire format uses camelCase; the field arrives as `rentEpoch`.
+    #[serde(rename = "rentEpoch", default)]
     rent_epoch: u64,
 }
 
