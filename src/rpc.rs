@@ -3,11 +3,15 @@
 //! We only implement the methods a client app needs to build, submit, and
 //! confirm transactions — no tokio, no `solana-client`. Extend as needed.
 
+use std::str::FromStr;
+
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use solana_commitment_config::CommitmentConfig;
 use solana_hash::Hash;
+use solana_pubkey::Pubkey;
 use wasm_bindgen::JsValue;
 
 use crate::error::{Error, Result};
@@ -207,6 +211,136 @@ impl RpcClient {
         self.call("getMinimumBalanceForRentExemption", json!([data_len]))
             .await
     }
+
+    /// `getAccountInfo` - read arbitrary account data. Returns `None` if the
+    /// account does not exist on-chain.
+    ///
+    /// Uses `confirmed` commitment by default; for finalized reads call
+    /// `get_account_info_with_commitment` and pass `CommitmentConfig::finalized()`.
+    pub async fn get_account_info(&self, address: &str) -> Result<Option<AccountInfo>> {
+        self.get_account_info_with_commitment(address, CommitmentConfig::confirmed())
+            .await
+    }
+
+    pub async fn get_account_info_with_commitment(
+        &self,
+        address: &str,
+        commitment: CommitmentConfig,
+    ) -> Result<Option<AccountInfo>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            value: Option<AccountInfoRaw>,
+        }
+        let resp: Resp = self
+            .call(
+                "getAccountInfo",
+                json!([
+                    address,
+                    {
+                        "commitment": commitment.commitment.to_string(),
+                        "encoding": "base64",
+                    }
+                ]),
+            )
+            .await?;
+        match resp.value {
+            None => Ok(None),
+            Some(raw) => Ok(Some(account_info_from_raw(raw)?)),
+        }
+    }
+
+    /// `getMultipleAccounts` - batch variant of `getAccountInfo`. Saves
+    /// round-trips when fetching N known account addresses. The returned
+    /// vector is parallel to `addresses` and uses `None` for any address
+    /// that does not exist on-chain.
+    pub async fn get_multiple_accounts(
+        &self,
+        addresses: &[&str],
+    ) -> Result<Vec<Option<AccountInfo>>> {
+        self.get_multiple_accounts_with_commitment(addresses, CommitmentConfig::confirmed())
+            .await
+    }
+
+    pub async fn get_multiple_accounts_with_commitment(
+        &self,
+        addresses: &[&str],
+        commitment: CommitmentConfig,
+    ) -> Result<Vec<Option<AccountInfo>>> {
+        #[derive(Deserialize)]
+        struct Resp {
+            value: Vec<Option<AccountInfoRaw>>,
+        }
+        let resp: Resp = self
+            .call(
+                "getMultipleAccounts",
+                json!([
+                    addresses,
+                    {
+                        "commitment": commitment.commitment.to_string(),
+                        "encoding": "base64",
+                    }
+                ]),
+            )
+            .await?;
+        resp.value
+            .into_iter()
+            .map(|opt| match opt {
+                None => Ok(None),
+                Some(raw) => Ok(Some(account_info_from_raw(raw)?)),
+            })
+            .collect()
+    }
+
+    /// `requestAirdrop` - dev/test convenience: ask the cluster to credit
+    /// `lamports` to `address`. Returns the resulting transaction signature.
+    /// Mainnet rejects this call; this is for `devnet` / `testnet` /
+    /// `solana-test-validator` only.
+    pub async fn request_airdrop(&self, address: &str, lamports: u64) -> Result<String> {
+        self.call("requestAirdrop", json!([address, lamports])).await
+    }
+}
+
+/// Decoded account state returned by `getAccountInfo` / `getMultipleAccounts`.
+#[derive(Clone, Debug)]
+pub struct AccountInfo {
+    /// Raw account data, base64-decoded into bytes.
+    pub data: Vec<u8>,
+    /// Owning program.
+    pub owner: Pubkey,
+    /// Account balance in lamports.
+    pub lamports: u64,
+    /// True if the account is an executable program.
+    pub executable: bool,
+    /// Epoch in which the account next owes rent.
+    pub rent_epoch: u64,
+}
+
+#[derive(Deserialize)]
+struct AccountInfoRaw {
+    /// Tuple of `[base64_string, "base64"]` when encoding=base64.
+    data: (String, String),
+    owner: String,
+    lamports: u64,
+    executable: bool,
+    /// Solana wire format uses camelCase; the field arrives as `rentEpoch`.
+    #[serde(rename = "rentEpoch", default)]
+    rent_epoch: u64,
+}
+
+fn account_info_from_raw(raw: AccountInfoRaw) -> Result<AccountInfo> {
+    let (data_b64, _encoding) = raw.data;
+    let data = BASE64_STANDARD
+        .decode(data_b64.as_bytes())
+        .map_err(|e| Error::Decode(format!("account data: {e}")))?;
+    let owner = Pubkey::from_str(&raw.owner)
+        .map_err(|e| Error::Decode(format!("account owner: {e}")))?;
+    Ok(AccountInfo {
+        data,
+        owner,
+        lamports: raw.lamports,
+        executable: raw.executable,
+        rent_epoch: raw.rent_epoch,
+    })
 }
 
 #[derive(Deserialize)]
