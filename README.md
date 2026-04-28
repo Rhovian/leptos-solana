@@ -133,6 +133,63 @@ let submit_sig: Vec<u8> = wallet.sign_and_send_raw(&tx_bytes).await?;
 let sig: Vec<u8> = wallet.sign_message(b"Welcome to my dApp").await?;
 ```
 
+### Error handling cookbook
+
+`Error::from(JsValue)` dispatches on the wallet's JSON-RPC error code
+(Wallet-Standard / EIP-1193 conventions: 4001, 4100, 4200, 4900, 4901)
+and substring-matches the canonical Solana RPC error messages
+(`Blockhash not found`, `insufficient funds`, `Transaction simulation
+failed`). The result is a typed variant you can match on without
+string-matching at the call site.
+
+Common UX patterns:
+
+```rust
+use leptos_solana::Error;
+
+match wallet.sign_and_send(&tx).await {
+    Ok(sig) => show_success(sig),
+
+    // User-facing recoverable: do nothing or show a toast.
+    Err(Error::UserRejected) => {}
+
+    // Wallet needs unlocking. Trigger your "Connect" UI.
+    Err(Error::WalletLocked) | Err(Error::WalletDisconnected) => {
+        prompt_to_unlock();
+    }
+
+    // Network mismatch. Show "switch to Mainnet" / "switch to Devnet".
+    Err(Error::WrongChain { expected, got }) => {
+        show_switch_chain_prompt(&expected, got.as_deref());
+    }
+
+    // Account-level: show "top up SOL".
+    Err(Error::InsufficientFunds) => show_topup_prompt(),
+
+    // Transient: refresh blockhash and retry once.
+    Err(Error::BlockhashNotFound) => retry_with_fresh_blockhash().await,
+
+    // Programmatic (validator-side) failure. Logs are the most useful
+    // piece for debugging.
+    Err(Error::SimulationFailed { logs, err }) => {
+        log::error!("simulation: {err}");
+        for line in logs { log::error!("  {line}"); }
+        show_error_toast(&err);
+    }
+
+    // Unrecognised JS-side error. Kept verbatim so you don't lose
+    // information; treat as a real bug.
+    Err(Error::Js(s)) => report_to_sentry(&s),
+
+    Err(other) => report_to_sentry(&other.to_string()),
+}
+```
+
+The `Error::Js(String)` fallback is preserved on purpose: unrecognised
+shapes pass through with the original wallet message so you don't paper
+over unknown errors. Cover them in your error reporting and add
+explicit variants here when patterns emerge.
+
 ## Demo
 
 The repo includes a runnable demo in [`demo/`](./demo) — wallet picker,
