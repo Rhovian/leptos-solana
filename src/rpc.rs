@@ -96,10 +96,9 @@ impl RpcClient {
 
         match wrapped {
             RpcResponse::Ok { result, .. } => Ok(result),
-            RpcResponse::Err { error, .. } => Err(Error::Rpc(format!(
-                "{} ({})",
-                error.message, error.code
-            ))),
+            RpcResponse::Err { error, .. } => {
+                Err(Error::Rpc(format!("{} ({})", error.message, error.code)))
+            }
         }
     }
 
@@ -291,12 +290,45 @@ impl RpcClient {
             .collect()
     }
 
+    /// `getTokenAccountBalance` - balance of a single SPL token account.
+    ///
+    /// Returns `amount` as a base-10 string in token-side units, plus
+    /// `decimals` and the pre-formatted `ui_amount_string` for display.
+    /// Use `ui_amount_string` rather than `ui_amount` for rendering - `f64`
+    /// introduces precision drift on small fractional units.
+    ///
+    /// Uses `confirmed` commitment by default; for finalized reads call
+    /// `get_token_account_balance_with_commitment`.
+    pub async fn get_token_account_balance(&self, address: &str) -> Result<TokenAccountBalance> {
+        self.get_token_account_balance_with_commitment(address, CommitmentConfig::confirmed())
+            .await
+    }
+
+    pub async fn get_token_account_balance_with_commitment(
+        &self,
+        address: &str,
+        commitment: CommitmentConfig,
+    ) -> Result<TokenAccountBalance> {
+        #[derive(Deserialize)]
+        struct Resp {
+            value: TokenAccountBalance,
+        }
+        let resp: Resp = self
+            .call(
+                "getTokenAccountBalance",
+                json!([address, { "commitment": commitment.commitment.to_string() }]),
+            )
+            .await?;
+        Ok(resp.value)
+    }
+
     /// `requestAirdrop` - dev/test convenience: ask the cluster to credit
     /// `lamports` to `address`. Returns the resulting transaction signature.
     /// Mainnet rejects this call; this is for `devnet` / `testnet` /
     /// `solana-test-validator` only.
     pub async fn request_airdrop(&self, address: &str, lamports: u64) -> Result<String> {
-        self.call("requestAirdrop", json!([address, lamports])).await
+        self.call("requestAirdrop", json!([address, lamports]))
+            .await
     }
 }
 
@@ -313,6 +345,24 @@ pub struct AccountInfo {
     pub executable: bool,
     /// Epoch in which the account next owes rent.
     pub rent_epoch: u64,
+}
+
+/// Token account balance returned by `getTokenAccountBalance`.
+///
+/// `amount` is the raw integer balance as a base-10 string (token-side
+/// representation; `u64::from_str` to parse). `ui_amount_string` is the
+/// canonical decimal string for display - prefer it over `ui_amount` for
+/// rendering since `f64` introduces precision drift on small fractional
+/// units. `ui_amount` is `Option<f64>` because the Solana RPC returns
+/// `null` for tokens whose balance overflows `f64`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TokenAccountBalance {
+    pub amount: String,
+    pub decimals: u8,
+    #[serde(rename = "uiAmount", default)]
+    pub ui_amount: Option<f64>,
+    #[serde(rename = "uiAmountString")]
+    pub ui_amount_string: String,
 }
 
 #[derive(Deserialize)]
@@ -332,8 +382,8 @@ fn account_info_from_raw(raw: AccountInfoRaw) -> Result<AccountInfo> {
     let data = BASE64_STANDARD
         .decode(data_b64.as_bytes())
         .map_err(|e| Error::Decode(format!("account data: {e}")))?;
-    let owner = Pubkey::from_str(&raw.owner)
-        .map_err(|e| Error::Decode(format!("account owner: {e}")))?;
+    let owner =
+        Pubkey::from_str(&raw.owner).map_err(|e| Error::Decode(format!("account owner: {e}")))?;
     Ok(AccountInfo {
         data,
         owner,
