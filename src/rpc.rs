@@ -322,6 +322,38 @@ impl RpcClient {
         Ok(resp.value)
     }
 
+    /// `getTransaction` - fetch a landed transaction with execution logs.
+    /// Returns `None` if the signature is unknown or has not yet landed.
+    ///
+    /// Useful for debugging: log messages, fee, and a top-level err for
+    /// failed transactions are all included on the returned struct.
+    ///
+    /// Uses `confirmed` commitment by default; for finalized reads call
+    /// `get_transaction_with_commitment`.
+    pub async fn get_transaction(&self, signature: &str) -> Result<Option<TransactionStatus>> {
+        self.get_transaction_with_commitment(signature, CommitmentConfig::confirmed())
+            .await
+    }
+
+    pub async fn get_transaction_with_commitment(
+        &self,
+        signature: &str,
+        commitment: CommitmentConfig,
+    ) -> Result<Option<TransactionStatus>> {
+        self.call(
+            "getTransaction",
+            json!([
+                signature,
+                {
+                    "commitment": commitment.commitment.to_string(),
+                    "encoding": "json",
+                    "maxSupportedTransactionVersion": 0,
+                }
+            ]),
+        )
+        .await
+    }
+
     /// `requestAirdrop` - dev/test convenience: ask the cluster to credit
     /// `lamports` to `address`. Returns the resulting transaction signature.
     /// Mainnet rejects this call; this is for `devnet` / `testnet` /
@@ -363,6 +395,32 @@ pub struct TokenAccountBalance {
     pub ui_amount: Option<f64>,
     #[serde(rename = "uiAmountString")]
     pub ui_amount_string: String,
+}
+
+/// Subset of `getTransaction` response useful for debugging - slot,
+/// timing, fee, log messages, and a top-level error if execution failed.
+/// The full `transaction` and `inner_instructions` are intentionally
+/// omitted to keep this struct small; if you need them, query the RPC
+/// directly via `call`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TransactionStatus {
+    pub slot: u64,
+    #[serde(rename = "blockTime", default)]
+    pub block_time: Option<i64>,
+    #[serde(default)]
+    pub meta: Option<TransactionMeta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TransactionMeta {
+    /// `None` on success, `Some(serde_json::Value)` describing the
+    /// failure on error. Solana's err shape varies (InstructionError,
+    /// InsufficientFundsForRent, etc.), so we surface raw JSON.
+    #[serde(default)]
+    pub err: Option<serde_json::Value>,
+    pub fee: u64,
+    #[serde(rename = "logMessages", default)]
+    pub log_messages: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
