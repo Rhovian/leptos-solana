@@ -79,8 +79,11 @@ pub enum Error {
     Serialize(String),
 }
 
-impl From<wasm_bindgen::JsValue> for Error {
-    fn from(v: wasm_bindgen::JsValue) -> Self {
+impl Error {
+    pub(crate) fn from_wallet_error(
+        v: wasm_bindgen::JsValue,
+        expected_chain: Option<&str>,
+    ) -> Self {
         // Wallets conventionally throw `{ code: <number>, message: <string> }`.
         // Dispatch on the JSON-RPC error code first; fall back to substring
         // matches on `message` for transaction-time errors that don't carry
@@ -100,13 +103,17 @@ impl From<wasm_bindgen::JsValue> for Error {
                 Some(4001.0) => return Error::UserRejected,
                 Some(4100.0) => return Error::WalletLocked,
                 Some(4200.0) => {
-                    let method = if msg.is_empty() { "unknown".to_string() } else { msg.clone() };
+                    let method = if msg.is_empty() {
+                        "unknown".to_string()
+                    } else {
+                        msg.clone()
+                    };
                     return Error::UnsupportedMethod(method);
                 }
                 Some(4900.0) => return Error::WalletDisconnected,
                 Some(4901.0) => {
                     return Error::WrongChain {
-                        expected: String::new(),
+                        expected: expected_chain.unwrap_or_default().to_string(),
                         got: None,
                     };
                 }
@@ -131,6 +138,9 @@ impl From<wasm_bindgen::JsValue> for Error {
                     let logs = js_sys::Reflect::get(obj, &"logs".into())
                         .ok()
                         .and_then(|js| {
+                            if js.is_undefined() || js.is_null() {
+                                return None;
+                            }
                             js_sys::Array::from(&js)
                                 .iter()
                                 .map(|v| v.as_string())
@@ -183,6 +193,12 @@ impl From<wasm_bindgen::JsValue> for Error {
                 .or_else(|| js_sys::JSON::stringify(&v).ok().and_then(|s| s.as_string()))
                 .unwrap_or_else(|| "unknown js error".into()),
         )
+    }
+}
+
+impl From<wasm_bindgen::JsValue> for Error {
+    fn from(v: wasm_bindgen::JsValue) -> Self {
+        Error::from_wallet_error(v, None)
     }
 }
 
