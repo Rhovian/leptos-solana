@@ -13,14 +13,14 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::error::{Error, Result};
 use crate::wallet::{
-    Wallet, WalletAccount, FEATURE_CONNECT, FEATURE_DISCONNECT,
-    FEATURE_SIGN_AND_SEND_TRANSACTION, FEATURE_SIGN_MESSAGE, FEATURE_SIGN_TRANSACTION,
+    Wallet, WalletAccount, FEATURE_CONNECT, FEATURE_DISCONNECT, FEATURE_SIGN_AND_SEND_TRANSACTION,
+    FEATURE_SIGN_MESSAGE, FEATURE_SIGN_TRANSACTION,
 };
 
 fn feature(wallet: &Wallet, id: &'static str) -> Result<JsValue> {
     let features = wallet.features();
-    let feat = Reflect::get(&features, &JsValue::from_str(id))
-        .map_err(|_| Error::MissingFeature(id))?;
+    let feat =
+        Reflect::get(&features, &JsValue::from_str(id)).map_err(|_| Error::MissingFeature(id))?;
     if feat.is_undefined() || feat.is_null() {
         return Err(Error::MissingFeature(id));
     }
@@ -38,17 +38,22 @@ fn set(obj: &Object, key: &str, value: &JsValue) -> Result<()> {
     Ok(())
 }
 
-async fn call_promise(method: &Function, this: &JsValue, arg: &JsValue) -> Result<JsValue> {
+async fn call_promise(
+    method: &Function,
+    this: &JsValue,
+    arg: &JsValue,
+    expected_chain: Option<&str>,
+) -> Result<JsValue> {
     let called = method.call1(this, arg).map_err(|e| {
         web_sys::console::error_2(&"[leptos-solana] wallet call threw:".into(), &e);
-        Error::from(e)
+        Error::from_wallet_error(e, expected_chain)
     })?;
     let promise: Promise = called
         .dyn_into()
         .map_err(|_| Error::Decode("feature method did not return a Promise".into()))?;
     JsFuture::from(promise).await.map_err(|e| {
         web_sys::console::error_2(&"[leptos-solana] wallet promise rejected:".into(), &e);
-        Error::from(e)
+        Error::from_wallet_error(e, expected_chain)
     })
 }
 
@@ -65,7 +70,7 @@ pub async fn connect(wallet: &Wallet, silent: bool) -> Result<Vec<WalletAccount>
         set(&input, "silent", &JsValue::from_bool(true))?;
     }
 
-    let output = call_promise(&connect, &feat, &input).await?;
+    let output = call_promise(&connect, &feat, &input, None).await?;
     let accounts_js = Reflect::get(&output, &"accounts".into())?;
     let arr: Array = accounts_js
         .dyn_into()
@@ -106,7 +111,7 @@ pub async fn sign_message(
 
     // solana:signMessage(...inputs) is variadic — pass ONE input, get back
     // a one-element array of outputs.
-    let output = call_promise(&sign, &feat, &input).await?;
+    let output = call_promise(&sign, &feat, &input, None).await?;
     let out_arr: Array = output
         .dyn_into()
         .map_err(|_| Error::Decode("signMessage did not return array".into()))?;
@@ -134,9 +139,13 @@ pub async fn sign_transaction(
     let input = Object::new();
     set(&input, "account", account.unchecked_ref())?;
     set(&input, "chain", &JsValue::from_str(chain))?;
-    set(&input, "transaction", Uint8Array::from(transaction).as_ref())?;
+    set(
+        &input,
+        "transaction",
+        Uint8Array::from(transaction).as_ref(),
+    )?;
 
-    let output = call_promise(&sign, &feat, &input).await?;
+    let output = call_promise(&sign, &feat, &input, Some(chain)).await?;
     let out_arr: Array = output
         .dyn_into()
         .map_err(|_| Error::Decode("signTransaction did not return array".into()))?;
@@ -172,9 +181,13 @@ pub async fn sign_and_send_transaction(
     let input = Object::new();
     set(&input, "account", account.unchecked_ref())?;
     set(&input, "chain", &JsValue::from_str(chain))?;
-    set(&input, "transaction", Uint8Array::from(transaction).as_ref())?;
+    set(
+        &input,
+        "transaction",
+        Uint8Array::from(transaction).as_ref(),
+    )?;
 
-    let output = call_promise(&send, &feat, &input).await?;
+    let output = call_promise(&send, &feat, &input, Some(chain)).await?;
     let out_arr: Array = output
         .dyn_into()
         .map_err(|_| Error::Decode("signAndSendTransaction did not return array".into()))?;
